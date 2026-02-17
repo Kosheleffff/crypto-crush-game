@@ -11,28 +11,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configuration
-const CHANNEL_USERNAME = '@cryptonftded';
-const BOT_TOKEN = process.env.BOT_TOKEN || '8537346515:AAE0UM_SUIP5ZzdQI_v29MQHad4yKzUynp8';
+const CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || '@cryptonftded';
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const BOT_API_URL = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// CORS for all sources (including Telegram)
-app.use(cors({
-    origin: '*', // Разрешаем все источники для TMA
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
+// CORS — allow all origins (TMA frontend is hosted separately)
+app.use(cors());
 
 app.use(express.json());
-app.use(express.static('public'));
 
 // Инициализируем API лидерборда
 initLeaderboardAPI(app);
-
-// Serve game HTML file
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/index.html'));
-});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -130,15 +119,6 @@ app.post('/api/leaderboard/check-subscription', async (req, res) => {
         console.error('Error checking subscription:', error);
         res.status(500).json({ error: 'Failed to check subscription' });
     }
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'OK',
-        channel: CHANNEL_USERNAME,
-        timestamp: new Date().toISOString()
-    });
 });
 
 // Start server

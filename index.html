@@ -574,7 +574,7 @@
         let moves = 30;
         let boosters = 3;
         let combo = 0;
-        let targetScore = 100;
+        let targetScore = 1000;
 
         // Drag and swipe variables
         let isDragging = false;
@@ -597,91 +597,105 @@
         ];
 
         // Загрузка данных из Telegram Cloud Storage
-        async function loadGameData() {
-            // Предотвращаем повторную загрузку
-            if (window._gameDataLoaded) {
-                return;
-            }
-            window._gameDataLoaded = true;
-            
-            if (!tg || !tg.CloudStorage) {
-                // Fallback на localStorage если Telegram API недоступен
-                const saved = localStorage.getItem('cryptoCrushSave');
-                if (saved) {
-                    const data = JSON.parse(saved);
-                    loadGameState(data);
-                }
-                return;
-            }
-
-            try {
-                // Загружаем данные из Telegram Cloud
-                const keys = ['gameSave', 'quests', 'boosters'];
-                tg.CloudStorage.getItems(keys, (error, result) => {
-                    if (!error && result) {
-                        if (result.gameSave) {
-                            const saveData = JSON.parse(result.gameSave);
-                            loadGameState(saveData);
-                        } else if (result.quests) {
-                            // Legacy save format
-                            quests = JSON.parse(result.quests);
-                            if (result.boosters) {
-                                boosters = parseInt(result.boosters);
-                            }
-                            updateStats();
-                        }
-                    } else {
-                        // Fallback на localStorage
-                        const saved = localStorage.getItem('cryptoCrushSave');
-                        if (saved) {
+        function loadGameData() {
+            return new Promise((resolve) => {
+                if (!tg || !tg.CloudStorage) {
+                    // Fallback на localStorage если Telegram API недоступен
+                    const saved = localStorage.getItem('cryptoCrushSave');
+                    if (saved) {
+                        try {
                             const data = JSON.parse(saved);
                             loadGameState(data);
+                        } catch (e) {
+                            console.error('Ошибка парсинга localStorage:', e);
                         }
                     }
-                });
-            } catch (e) {
-                console.error('Ошибка загрузки из Telegram Cloud:', e);
-                // Fallback на localStorage
-                const saved = localStorage.getItem('cryptoCrushSave');
-                if (saved) {
-                    const data = JSON.parse(saved);
-                    loadGameState(data);
+                    resolve();
+                    return;
                 }
-            }
+
+                try {
+                    const keys = ['gameSave', 'quests', 'boosters'];
+                    tg.CloudStorage.getItems(keys, (error, result) => {
+                        if (!error && result) {
+                            if (result.gameSave) {
+                                try {
+                                    const saveData = JSON.parse(result.gameSave);
+                                    loadGameState(saveData);
+                                } catch (e) {
+                                    console.error('Ошибка парсинга gameSave:', e);
+                                }
+                            } else if (result.quests) {
+                                try {
+                                    quests = JSON.parse(result.quests);
+                                    if (result.boosters) {
+                                        boosters = parseInt(result.boosters);
+                                    }
+                                    updateStats();
+                                } catch (e) {
+                                    console.error('Ошибка парсинга quests:', e);
+                                }
+                            }
+                        } else {
+                            // Fallback на localStorage
+                            const saved = localStorage.getItem('cryptoCrushSave');
+                            if (saved) {
+                                try {
+                                    const data = JSON.parse(saved);
+                                    loadGameState(data);
+                                } catch (e) {
+                                    console.error('Ошибка парсинга localStorage:', e);
+                                }
+                            }
+                        }
+                        resolve();
+                    });
+                } catch (e) {
+                    console.error('Ошибка загрузки из Telegram Cloud:', e);
+                    const saved = localStorage.getItem('cryptoCrushSave');
+                    if (saved) {
+                        try {
+                            const data = JSON.parse(saved);
+                            loadGameState(data);
+                        } catch (parseErr) {
+                            console.error('Ошибка парсинга localStorage:', parseErr);
+                        }
+                    }
+                    resolve();
+                }
+            });
         }
+
+        let boardRestoredFromSave = false;
 
         // Загрузка состояния игры
         function loadGameState(data) {
-            if (data.quests) quests = data.quests;
+            if (data.quests) {
+                // Merge saved quests with default quests to preserve any new quests added in updates
+                const savedQuestMap = {};
+                data.quests.forEach(q => { savedQuestMap[q.id] = q; });
+                quests = quests.map(q => savedQuestMap[q.id] || q);
+            }
             if (data.boosters !== undefined) boosters = data.boosters;
-            
+
             // Загружаем состояние текущей игры если есть
             if (data.currentGame && data.currentGame.board) {
-                // Предотвращаем повторные запросы
-                if (window._saveGamePrompted) {
-                    updateStats();
-                    return;
-                }
-                window._saveGamePrompted = true;
-                
-                const shouldContinue = confirm('🎮 Обнаружена сохраненная игра!\n\nПродолжить с прошлого раза?');
-                if (shouldContinue) {
-                    board = data.currentGame.board;
-                    score = data.currentGame.score;
-                    level = data.currentGame.level;
-                    moves = data.currentGame.moves;
-                    combo = data.currentGame.combo;
-                    targetScore = data.currentGame.targetScore;
-                    renderBoard();
-                    return;
-                }
+                board = data.currentGame.board;
+                score = data.currentGame.score || 0;
+                level = data.currentGame.level || 1;
+                moves = data.currentGame.moves || 30;
+                combo = data.currentGame.combo || 0;
+                targetScore = data.currentGame.targetScore || 1000;
+                boardRestoredFromSave = true;
+                renderBoard();
+                return;
             }
-            
+
             updateStats();
         }
 
         // Сохранение данных в Telegram Cloud Storage
-        async function saveGameData(saveCurrentGame = false) {
+        function saveGameData(saveCurrentGame = false) {
             const data = {
                 quests: quests,
                 boosters: boosters,
@@ -701,20 +715,25 @@
                 };
             }
 
-            // Сохраняем в localStorage как запасной вариант
-            localStorage.setItem('cryptoCrushSave', JSON.stringify(data));
+            // Всегда сохраняем в localStorage
+            try {
+                localStorage.setItem('cryptoCrushSave', JSON.stringify(data));
+            } catch (e) {
+                console.error('Ошибка сохранения в localStorage:', e);
+            }
 
             if (!tg || !tg.CloudStorage) {
-                return; // Если Telegram API недоступен, используем только localStorage
+                return;
             }
 
             try {
-                // Сохраняем в Telegram Cloud
-                tg.CloudStorage.setItem('gameSave', JSON.stringify(data), (error, result) => {
-                    if (error) console.error('Ошибка сохранения игры:', error);
+                tg.CloudStorage.setItem('gameSave', JSON.stringify(data), (error) => {
+                    if (error) {
+                        console.error('Ошибка сохранения в Telegram Cloud:', error);
+                    }
                 });
             } catch (e) {
-                console.error('Ошибка сохранения в Telegram Cloud:', e);
+                console.error('Ошибка вызова Telegram CloudStorage:', e);
             }
         }
 
@@ -1278,7 +1297,7 @@
             level = 1;
             moves = 30;
             combo = 0;
-            targetScore = 100;
+            targetScore = 1000;
             selectedCell = null;
             initBoard();
             startAutoSave();
@@ -1664,7 +1683,8 @@
         const CHANNEL_USERNAME = '@cryptonftded'; // Ваш канал
         
         // Конфигурация глобального лидерборда
-        const GLOBAL_LEADERBOARD_API = 'https://crypto-crush-game.onrender.com/api/leaderboard'; // Backend на Render.com
+        // Backend API hosted separately on Render.com
+        const GLOBAL_LEADERBOARD_API = 'https://crypto-crush-game.onrender.com/api/leaderboard';
         const LEADERBOARD_SYNC_INTERVAL = 60000; // Синхронизация каждую минуту
         let globalLeaderboard = [];
         let lastSyncTime = null;
@@ -1753,17 +1773,23 @@
         async function init() {
             // Получаем ID текущего пользователя
             currentUserId = tg?.initDataUnsafe?.user?.id || 'local_' + Date.now();
-            
+
             await loadGameData();
-            initBoard();
-            startAutoSave(); // Запускаем автосохранение
-            
+
+            // Инициализируем новую доску только если не восстановили из сохранения
+            if (!boardRestoredFromSave) {
+                initBoard();
+            }
+
+            startAutoSave();
+
             // Запускаем синхронизацию лидерборда
             syncGlobalLeaderboard();
             setInterval(syncGlobalLeaderboard, LEADERBOARD_SYNC_INTERVAL);
         }
 
         init();
+
         window.addEventListener('beforeunload', () => {
             if (moves > 0) {
                 saveGameData(true);
@@ -1778,8 +1804,6 @@
                 }
             });
         }
-
-        init();
 
         document.addEventListener('gesturestart', function (e) {
             e.preventDefault();

@@ -88,7 +88,7 @@ crypto-crush-game/
 
 ### **Environment Variables**
 ```bash
-BOT_TOKEN= 
+BOT_TOKEN=8537346515:AAE0UM_SUIP5ZzdQI_v29MQHad4yKzUynp8
 CHANNEL_USERNAME=@cryptonftded
 ```
 
