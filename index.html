@@ -757,7 +757,7 @@
         // Ручное сохранение
         function manualSave() {
             if (moves <= 0) {
-                alert('ℹ️ Нечего сохранять - игра не начата!');
+                showNotification('ℹ️ Нечего сохранять');
                 return;
             }
             
@@ -1220,33 +1220,80 @@
                 moves += 20;
                 boosters++;
                 updateQuest('level', level);
-                
+
                 if (levelMovesLeft >= 20) {
                     updateQuest('efficiency', 1, true);
                 }
-                
-                alert(`🎉 Уровень ${level} пройден!\n+20 ходов\n+1 бустер`);
+
+                showNotification(`🎉 Уровень ${level}!\n+20 ходов, +1 бустер`);
+                updateStats();
             }
         }
 
-        function checkGameOver() {
+        function showNotification(text) {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                padding: 15px 25px;
+                border-radius: 25px;
+                font-weight: bold;
+                z-index: 1002;
+                animation: slideDown 0.3s ease-out;
+                box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+                text-align: center;
+                white-space: pre-line;
+                font-size: 16px;
+            `;
+            notification.textContent = text;
+            document.body.appendChild(notification);
+            setTimeout(() => notification.remove(), 3000);
+        }
+
+        async function checkGameOver() {
             if (moves <= 0 && score < targetScore) {
                 stopAutoSave();
                 updateQuest('games', 1, true);
-                saveToLeaderboard(score);
-                saveGameData(false); // Сохраняем без текущей игры
-                
-                setTimeout(() => {
-                    if (confirm(`Игра окончена!\n\nОчки: ${score}\nУровень: ${level}\n\nНачать новую игру?`)) {
+
+                // Сохраняем в лидерборд и ждём завершения
+                await saveToLeaderboard(score);
+                saveGameData(false);
+
+                // Используем Telegram popup вместо confirm()
+                showGameOverModal(score, level);
+            }
+        }
+
+        function showGameOverModal(finalScore, finalLevel) {
+            // Пробуем нативный Telegram popup
+            if (tg && tg.showPopup) {
+                tg.showPopup({
+                    title: 'Игра окончена!',
+                    message: `Очки: ${finalScore}\nУровень: ${finalLevel}`,
+                    buttons: [
+                        { id: 'restart', type: 'default', text: 'Новая игра' },
+                        { id: 'close', type: 'cancel' }
+                    ]
+                }, (buttonId) => {
+                    if (buttonId === 'restart') {
                         restartGame();
                     }
-                }, 500);
+                });
+            } else {
+                // Fallback для браузера
+                if (confirm(`Игра окончена!\n\nОчки: ${finalScore}\nУровень: ${finalLevel}\n\nНачать новую игру?`)) {
+                    restartGame();
+                }
             }
         }
 
         function useBooster() {
             if (boosters <= 0) {
-                alert('❌ Бустеры закончились! Выполняйте задания чтобы получить больше.');
+                showNotification('❌ Бустеры закончились!\nВыполняйте задания');
                 return;
             }
             
@@ -1402,7 +1449,7 @@
                 updateStats();
                 saveGameData(true); // Сохраняем после получения награды
                 showQuests();
-                alert(`🎁 Получено ${quest.reward} бустер${quest.reward > 1 ? 'а' : ''}!`);
+                showNotification(`🎁 +${quest.reward} бустер${quest.reward > 1 ? 'а' : ''}!`);
             }
         }
 
@@ -1419,8 +1466,8 @@
 
         async function saveToLeaderboard(finalScore) {
             const userName = tg?.initDataUnsafe?.user?.first_name || 'Игрок';
-            const userId = tg?.initDataUnsafe?.user?.id || 'local';
-            
+            const userId = String(tg?.initDataUnsafe?.user?.id || 'local');
+
             const entry = {
                 id: userId,
                 name: userName,
@@ -1530,34 +1577,40 @@
         // Синхронизация глобального лидерборда
         async function syncGlobalLeaderboard() {
             if (isLeaderboardSyncing) return;
-            
+
             isLeaderboardSyncing = true;
-            
+
             try {
-                // Пытаемся загрузить с backend
+                // Пытаемся загрузить с backend (с таймаутом 5 секунд)
                 try {
-                    const response = await fetch(GLOBAL_LEADERBOARD_API);
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                    const response = await fetch(GLOBAL_LEADERBOARD_API, {
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+
                     if (response.ok) {
                         const data = await response.json();
                         globalLeaderboard = data;
                         lastSyncTime = new Date();
-                        
-                        // Сохраняем локально как кэш
+
                         localStorage.setItem('globalLeaderboard', JSON.stringify(data));
-                        console.log('🔄 Глобальный лидерборд синхронизирован с backend:', data.length, 'игроков');
+                        console.log('🔄 Синхронизировано с backend:', data.length, 'игроков');
                         return;
                     }
                 } catch (apiError) {
-                    console.log('📡 Backend недоступен, используем локальное хранилище');
+                    console.log('📡 Backend недоступен, используем локальный кэш');
                 }
-                
-                // Fallback на localStorage
-                const data = JSON.parse(localStorage.getItem('globalLeaderboard') || '[]');
-                globalLeaderboard = data;
+
+                // Fallback — загружаем кэш из localStorage
+                const cachedData = JSON.parse(localStorage.getItem('globalLeaderboard') || '[]');
+                globalLeaderboard = cachedData;
                 lastSyncTime = new Date();
-                
-                console.log('🔄 Глобальный лидерборд загружен из localStorage:', data.length, 'игроков');
-                
+
+                console.log('🔄 Загружен кэш:', cachedData.length, 'игроков');
+
             } catch (error) {
                 console.error('Ошибка синхронизации лидерборда:', error);
             } finally {
@@ -1731,7 +1784,7 @@
         async function verifySubscription() {
             const userId = tg?.initDataUnsafe?.user?.id;
             if (!userId) {
-                alert('❌ Ошибка: не удалось получить ID пользователя');
+                showNotification('❌ Не удалось получить ID');
                 return;
             }
 
@@ -1772,7 +1825,7 @@
         // Инициализация игры
         async function init() {
             // Получаем ID текущего пользователя
-            currentUserId = tg?.initDataUnsafe?.user?.id || 'local_' + Date.now();
+            currentUserId = String(tg?.initDataUnsafe?.user?.id || 'local_' + Date.now());
 
             await loadGameData();
 
