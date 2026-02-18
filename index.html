@@ -596,72 +596,82 @@
             { id: 9, title: 'Подписчик', description: 'Подпишитесь на наш канал', target: 1, current: 0, type: 'subscribe', reward: 5, claimed: false, channelUsername: '@cryptonftded' }
         ];
 
-        // Загрузка данных из Telegram Cloud Storage
-        function loadGameData() {
+        // === Универсальное хранилище: DeviceStorage → CloudStorage → localStorage ===
+        function storageSet(key, value) {
+            const strValue = typeof value === 'string' ? value : JSON.stringify(value);
+
+            // 1. Telegram DeviceStorage (Bot API 9.0+, работает всегда в TMA)
+            if (tg && tg.DeviceStorage) {
+                tg.DeviceStorage.setItem(key, strValue, (error) => {
+                    if (error) console.error('DeviceStorage setItem error:', error);
+                });
+            }
+            // 2. Telegram CloudStorage (Bot API 6.9+, синхронизация между устройствами)
+            if (tg && tg.CloudStorage) {
+                tg.CloudStorage.setItem(key, strValue, (error) => {
+                    if (error) console.error('CloudStorage setItem error:', error);
+                });
+            }
+            // 3. localStorage fallback (может быть заблокирован в iframe)
+            try { localStorage.setItem(key, strValue); } catch(e) {}
+        }
+
+        function storageGet(key) {
             return new Promise((resolve) => {
-                if (!tg || !tg.CloudStorage) {
-                    // Fallback на localStorage если Telegram API недоступен
-                    const saved = localStorage.getItem('cryptoCrushSave');
-                    if (saved) {
-                        try {
-                            const data = JSON.parse(saved);
-                            loadGameState(data);
-                        } catch (e) {
-                            console.error('Ошибка парсинга localStorage:', e);
+                // 1. Пробуем DeviceStorage
+                if (tg && tg.DeviceStorage) {
+                    tg.DeviceStorage.getItem(key, (error, value) => {
+                        if (!error && value) {
+                            console.log('📱 Loaded from DeviceStorage:', key);
+                            resolve(value);
+                            return;
                         }
-                    }
-                    resolve();
+                        // Fallback на CloudStorage
+                        tryCloudStorage(key, resolve);
+                    });
                     return;
                 }
+                tryCloudStorage(key, resolve);
+            });
+        }
 
-                try {
-                    const keys = ['gameSave', 'quests', 'boosters'];
-                    tg.CloudStorage.getItems(keys, (error, result) => {
-                        if (!error && result) {
-                            if (result.gameSave) {
-                                try {
-                                    const saveData = JSON.parse(result.gameSave);
-                                    loadGameState(saveData);
-                                } catch (e) {
-                                    console.error('Ошибка парсинга gameSave:', e);
-                                }
-                            } else if (result.quests) {
-                                try {
-                                    quests = JSON.parse(result.quests);
-                                    if (result.boosters) {
-                                        boosters = parseInt(result.boosters);
-                                    }
-                                    updateStats();
-                                } catch (e) {
-                                    console.error('Ошибка парсинга quests:', e);
-                                }
-                            }
-                        } else {
-                            // Fallback на localStorage
-                            const saved = localStorage.getItem('cryptoCrushSave');
-                            if (saved) {
-                                try {
-                                    const data = JSON.parse(saved);
-                                    loadGameState(data);
-                                } catch (e) {
-                                    console.error('Ошибка парсинга localStorage:', e);
-                                }
-                            }
-                        }
-                        resolve();
-                    });
-                } catch (e) {
-                    console.error('Ошибка загрузки из Telegram Cloud:', e);
-                    const saved = localStorage.getItem('cryptoCrushSave');
-                    if (saved) {
-                        try {
-                            const data = JSON.parse(saved);
-                            loadGameState(data);
-                        } catch (parseErr) {
-                            console.error('Ошибка парсинга localStorage:', parseErr);
-                        }
+        function tryCloudStorage(key, resolve) {
+            if (tg && tg.CloudStorage) {
+                tg.CloudStorage.getItem(key, (error, value) => {
+                    if (!error && value) {
+                        console.log('☁️ Loaded from CloudStorage:', key);
+                        resolve(value);
+                        return;
                     }
-                    resolve();
+                    // Fallback на localStorage
+                    resolve(tryLocalStorage(key));
+                });
+                return;
+            }
+            resolve(tryLocalStorage(key));
+        }
+
+        function tryLocalStorage(key) {
+            try {
+                const value = localStorage.getItem(key);
+                if (value) console.log('💾 Loaded from localStorage:', key);
+                return value;
+            } catch(e) {
+                console.error('localStorage blocked:', e);
+                return null;
+            }
+        }
+
+        // Загрузка данных
+        function loadGameData() {
+            return storageGet('gameSave').then((raw) => {
+                if (raw) {
+                    try {
+                        const data = JSON.parse(raw);
+                        loadGameState(data);
+                    } catch(e) {
+                        console.error('Ошибка парсинга save:', e);
+                    }
                 }
             });
         }
@@ -694,7 +704,7 @@
             updateStats();
         }
 
-        // Сохранение данных в Telegram Cloud Storage
+        // Сохранение данных
         function saveGameData(saveCurrentGame = false) {
             const data = {
                 quests: quests,
@@ -703,7 +713,6 @@
                 lastSaved: new Date().toISOString()
             };
 
-            // Сохраняем текущее состояние игры если нужно
             if (saveCurrentGame && moves > 0) {
                 data.currentGame = {
                     board: board,
@@ -715,26 +724,7 @@
                 };
             }
 
-            // Всегда сохраняем в localStorage
-            try {
-                localStorage.setItem('cryptoCrushSave', JSON.stringify(data));
-            } catch (e) {
-                console.error('Ошибка сохранения в localStorage:', e);
-            }
-
-            if (!tg || !tg.CloudStorage) {
-                return;
-            }
-
-            try {
-                tg.CloudStorage.setItem('gameSave', JSON.stringify(data), (error) => {
-                    if (error) {
-                        console.error('Ошибка сохранения в Telegram Cloud:', error);
-                    }
-                });
-            } catch (e) {
-                console.error('Ошибка вызова Telegram CloudStorage:', e);
-            }
+            storageSet('gameSave', data);
         }
 
         // Автосохранение каждые 30 секунд
@@ -1174,14 +1164,14 @@
                 renderBoard();
                 saveGameData(true); // Автосохранение после хода
                 
-                setTimeout(() => {
+                setTimeout(async () => {
                     const newMatches = findMatches();
                     if (newMatches.length > 0) {
                         processMatches(newMatches);
                     } else {
                         combo = 0;
                         checkLevelComplete();
-                        checkGameOver();
+                        await checkGameOver();
                     }
                 }, 300);
             }, 300);
@@ -1477,71 +1467,39 @@
                 user_id: userId
             };
 
-            // Сохраняем в локальный лидерборд
-            const localLeaderboard = JSON.parse(localStorage.getItem('cryptoCrushLeaderboard') || '[]');
-            localLeaderboard.push(entry);
-            localLeaderboard.sort((a, b) => b.score - a.score);
-            localLeaderboard.splice(10);
-            localStorage.setItem('cryptoCrushLeaderboard', JSON.stringify(localLeaderboard));
-
-            // Сохраняем в Telegram Cloud
-            if (tg && tg.CloudStorage) {
-                try {
-                    tg.CloudStorage.setItem('leaderboard', JSON.stringify(localLeaderboard), (error) => {
-                        if (error) console.error('Ошибка сохранения лидерборда:', error);
-                    });
-                } catch (e) {
-                    console.error('Ошибка:', e);
-                }
-            }
-            
-            // Отправляем в глобальный лидерборд
+            // Отправляем в глобальный лидерборд (основной способ)
             await submitToGlobalLeaderboard(entry);
+
+            // Также сохраняем локально через универсальное хранилище
+            storageSet('lastScore', entry);
         }
         
         // Отправка результата в глобальный лидерборд
         async function submitToGlobalLeaderboard(entry) {
             try {
-                // Для локального тестирования сохраняем в localStorage
-                const globalData = JSON.parse(localStorage.getItem('globalLeaderboard') || '[]');
-                
-                // Удаляем старый результат этого пользователя
-                const filteredData = globalData.filter(item => item.id !== entry.id);
-                filteredData.push(entry);
-                
-                // Сортируем и оставляем топ 100
-                filteredData.sort((a, b) => b.score - a.score);
-                const top100 = filteredData.slice(0, 100);
-                
-                localStorage.setItem('globalLeaderboard', JSON.stringify(top100));
-                
-                // Пытаемся отправить на backend если доступен
-                try {
-                    const response = await fetch(GLOBAL_LEADERBOARD_API, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(entry)
-                    });
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        console.log('🏆 Результат отправлен в глобальный лидерборд:', result);
-                        
-                        // Показываем уведомление о ранге
-                        if (result.rank) {
-                            showRankNotification(result.rank, result.totalPlayers);
-                        }
-                    } else {
-                        console.log('📡 Backend недоступен, используем локальное хранилище');
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+                const response = await fetch(GLOBAL_LEADERBOARD_API, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(entry),
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('🏆 Отправлено в лидерборд:', result);
+
+                    if (result.rank) {
+                        showRankNotification(result.rank, result.totalPlayers);
                     }
-                } catch (apiError) {
-                    console.log('📡 Backend недоступен, используем локальное хранилище');
+                } else {
+                    console.log('📡 Backend вернул ошибку:', response.status);
                 }
-                
-                console.log('🏆 Результат сохранен:', entry.score);
-                
             } catch (error) {
-                console.error('Ошибка отправки в глобальный лидерборд:', error);
+                console.log('📡 Не удалось отправить в лидерборд:', error.message);
             }
         }
         
@@ -1596,7 +1554,7 @@
                         globalLeaderboard = data;
                         lastSyncTime = new Date();
 
-                        localStorage.setItem('globalLeaderboard', JSON.stringify(data));
+                        storageSet('globalLeaderboard', data);
                         console.log('🔄 Синхронизировано с backend:', data.length, 'игроков');
                         return;
                     }
@@ -1604,8 +1562,9 @@
                     console.log('📡 Backend недоступен, используем локальный кэш');
                 }
 
-                // Fallback — загружаем кэш из localStorage
-                const cachedData = JSON.parse(localStorage.getItem('globalLeaderboard') || '[]');
+                // Fallback — загружаем кэш
+                const cachedRaw = await storageGet('globalLeaderboard');
+                const cachedData = cachedRaw ? JSON.parse(cachedRaw) : [];
                 globalLeaderboard = cachedData;
                 lastSyncTime = new Date();
 
@@ -1619,8 +1578,12 @@
         }
 
         function getHighScore() {
-            const leaderboard = JSON.parse(localStorage.getItem('cryptoCrushLeaderboard') || '[]');
-            return leaderboard.length > 0 ? leaderboard[0].score : 0;
+            try {
+                const leaderboard = JSON.parse(localStorage.getItem('cryptoCrushLeaderboard') || '[]');
+                return leaderboard.length > 0 ? leaderboard[0].score : 0;
+            } catch(e) {
+                return 0;
+            }
         }
 
         async function showLeaderboard() {
