@@ -574,7 +574,14 @@
         let moves = 30;
         let boosters = 3;
         let combo = 0;
-        let targetScore = 1000;
+        let targetScore = 100;
+
+        function getTargetScore(lvl) {
+            if (lvl === 1) return 100;
+            if (lvl === 2) return 250;
+            if (lvl === 3) return 500;
+            return lvl * 1000;
+        }
 
         // Drag and swipe variables
         let isDragging = false;
@@ -695,7 +702,7 @@
                 level = data.currentGame.level || 1;
                 moves = data.currentGame.moves || 30;
                 combo = data.currentGame.combo || 0;
-                targetScore = data.currentGame.targetScore || 1000;
+                targetScore = data.currentGame.targetScore || getTargetScore(level);
                 boardRestoredFromSave = true;
                 renderBoard();
                 return;
@@ -1170,7 +1177,7 @@
                         processMatches(newMatches);
                     } else {
                         combo = 0;
-                        checkLevelComplete();
+                        await checkLevelComplete();
                         await checkGameOver();
                     }
                 }, 300);
@@ -1202,11 +1209,11 @@
             }
         }
 
-        function checkLevelComplete() {
+        async function checkLevelComplete() {
             if (score >= targetScore) {
                 const levelMovesLeft = 30 - moves + (level - 1) * 20;
                 level++;
-                targetScore = level * 1000;
+                targetScore = getTargetScore(level);
                 moves += 20;
                 boosters++;
                 updateQuest('level', level);
@@ -1217,6 +1224,9 @@
 
                 showNotification(`🎉 Уровень ${level}!\n+20 ходов, +1 бустер`);
                 updateStats();
+
+                // Отправляем результат в лидерборд после каждого пройденного уровня
+                await saveToLeaderboard(score);
             }
         }
 
@@ -1334,7 +1344,7 @@
             level = 1;
             moves = 30;
             combo = 0;
-            targetScore = 1000;
+            targetScore = 100;
             selectedCell = null;
             initBoard();
             startAutoSave();
@@ -1455,7 +1465,9 @@
         }
 
         async function saveToLeaderboard(finalScore) {
-            const userName = tg?.initDataUnsafe?.user?.first_name || 'Игрок';
+            const firstName = tg?.initDataUnsafe?.user?.first_name || '';
+            const lastName = tg?.initDataUnsafe?.user?.last_name || '';
+            const userName = (firstName + ' ' + lastName).trim() || 'Игрок';
             const userId = String(tg?.initDataUnsafe?.user?.id || 'local');
 
             const entry = {
